@@ -1,0 +1,75 @@
+{
+  description = "mission10 development environments (drones never see this — they run apt)";
+
+  inputs = {
+    nix-ros-overlay.url = "github:lopsided98/nix-ros-overlay/master";
+    nixpkgs.follows = "nix-ros-overlay/nixpkgs"; # IMPORTANT: stay in lockstep with the overlay
+  };
+
+  outputs = { self, nix-ros-overlay, nixpkgs }:
+    nix-ros-overlay.inputs.flake-utils.lib.eachDefaultSystem (system:
+      let
+        pkgs = import nixpkgs {
+          inherit system;
+          overlays = [ nix-ros-overlay.overlays.default ];
+        };
+
+        # PX4<->ROS2 uXRCE-DDS bridge. Not in nixpkgs; pinned to the
+        # PX4-compatible v2.4.3 (v3.x breaks the client). Built against the
+        # overlay's Fast-DDS (fastrtps). See nix/microxrce-agent.nix.
+        microxrceAgent = pkgs.callPackage ./nix/microxrce-agent.nix {
+          inherit (pkgs.rosPackages.jazzy) fastrtps;
+        };
+      in {
+        devShells = {
+          # Pure-core development. Runs anywhere, including macOS; mirrors CI.
+          # Enough to hack on ros/*/ cores, run every test suite, and work on
+          # models/. Python extras that aren't in nixpkgs (qtm-rt, pyulog)
+          # live in per-package venvs via uv.
+          default = pkgs.mkShell {
+            name = "mission10";
+            packages = [
+              pkgs.python3
+              pkgs.vcstool
+              pkgs.uv
+            ];
+          };
+        } // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
+          # ROS rim + sim development (Linux only since ros.cachix.org)
+          #
+          # nix provides the ENVIRONMENT; colcon still builds the assembled
+          # workspace inside it (scripts/make_workspace.sh). Our packages
+          # never become nix derivations.
+          sim = pkgs.mkShell {
+            name = "mission10-sim";
+            packages = [
+              pkgs.colcon
+              pkgs.vcstool
+              microxrceAgent # PX4<->ROS2 bridge (MicroXRCEAgent udp4 -p 8888)
+              (with pkgs.rosPackages.jazzy; buildEnv {
+                paths = [
+                  ros-core # rclpy, ros2cli, ament, ...
+                  nav-msgs # gz truth odometry -> sim_truth_ev
+                  vision-msgs # detection wire contract
+                  ros-gz-sim # Gazebo (gz) integration
+                  ros-gz-bridge
+                  # px4_msgs is deliberately NOT here: pinned in
+                  # externals.repos, colcon-built in the workspace so it
+                  # always matches deployed firmware.
+                ];
+              })
+            ];
+            # TODO(first sim session):
+            # - PX4 SITL binary: belongs to the PX4-Autopilot fork's flake,
+            #   not this one. This shell only needs to talk to a running SITL.
+            # - GUI apps (rviz2, gz gui) on non-NixOS need nixGL or
+            #   nix-system-graphics for GL.
+          };
+        };
+      });
+
+  nixConfig = {
+    extra-substituters = [ "https://ros.cachix.org" ];
+    extra-trusted-public-keys = [ "ros.cachix.org-1:dSyZxI8geDCJrwgvCOHDoAfOm5sV1wCPjBkKL+38Rvo=" ];
+  };
+}

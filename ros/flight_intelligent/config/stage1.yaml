@@ -1,0 +1,17 @@
+orbit_mission:
+  ros__parameters:
+    vehicle_namespace: px4_0
+    setpoint_rate_hz: 20.0
+    prestream_cycles: 10
+    wait_for_start: true
+    force_arm: false
+    takeoff_altitude_m: 6.0
+    takeoff_acceptance_m: 0.4
+    takeoff_timeout_s: 30.0
+    orbit_center_e_m: 0.0
+    orbit_center_n_m: 4.6
+    orbit_radius_m: 4.6
+    orbit_speed_mps: 2.0
+    orbit_revolutions: 10.0
+    hover_time_s: 2.0
+    yaw_mode: inward
