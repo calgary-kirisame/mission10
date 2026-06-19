@@ -47,6 +47,15 @@
               pkgs.colcon
               pkgs.vcstool
               microxrceAgent # PX4<->ROS2 bridge (MicroXRCEAgent udp4 -p 8888)
+              # Colcon builds px4_msgs from source; expose its build tools as
+              # real prefixes instead of only through the aggregate ros-env.
+              # PX4's top-level Makefile also probes PATH for ninja before
+              # delegating into its existing CMake/Ninja build directory.
+              pkgs.ninja
+              pkgs.rosPackages.jazzy.ament-cmake
+              pkgs.rosPackages.jazzy.ament-cmake-core
+              pkgs.rosPackages.jazzy.rosidl-default-generators
+              pkgs.rosPackages.jazzy.builtin-interfaces
               (with pkgs.rosPackages.jazzy; buildEnv {
                 paths = [
                   ros-core # rclpy, ros2cli, ament, ...
@@ -60,6 +69,10 @@
                 ];
               })
             ];
+            shellHook = ''
+              export CMAKE_PREFIX_PATH="''${AMENT_PREFIX_PATH}''${CMAKE_PREFIX_PATH:+:}''${CMAKE_PREFIX_PATH:-}"
+              export QT_QPA_PLATFORM=xcb
+            '';
             # TODO(first sim session):
             # - PX4 SITL binary: belongs to the PX4-Autopilot fork's flake,
             #   not this one. This shell only needs to talk to a running SITL.

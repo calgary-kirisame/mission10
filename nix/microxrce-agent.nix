@@ -10,7 +10,9 @@
 #   - Fast-DDS  -> rosPackages.jazzy.fastrtps  (Fast-DDS 2.14.6; "fastrtps" is
 #                  the legacy ROS package name for Fast-DDS)
 #   - Fast-CDR  -> nixpkgs fastcdr 2.3.5  (agent's USE_SYSTEM_FASTCDR wants v2)
-#   - spdlog    -> nixpkgs spdlog          (UAGENT_USE_SYSTEM_LOGGER)
+# The upstream v2.4.3 logger code does not compile with current spdlog/fmt
+# because several endpoint types are logged through fmt without formatters.
+# SITL only needs the bridge executable, so the logger profile is disabled.
 #
 # P2P profile is OFF: with superbuild off it would still try to git-fetch the
 # Micro-XRCE-DDS *client* (v2.4.3) for the P2P feature. SITL only needs the plain
@@ -20,7 +22,7 @@
 # 2.x installs its cmake config under the `fastrtps` name, but the agent does
 # find_package(fastdds). If cmake can't find the package, that's the mismatch —
 # the fix is usually that fastrtps's config provides both, or set fastdds_DIR.
-{ lib, stdenv, fetchFromGitHub, cmake, fastrtps, fastcdr, spdlog, asio, tinyxml-2 }:
+{ lib, stdenv, fetchFromGitHub, cmake, fastrtps, fastcdr, asio, tinyxml-2 }:
 
 stdenv.mkDerivation (finalAttrs: {
   pname = "micro-xrce-dds-agent";
@@ -34,13 +36,13 @@ stdenv.mkDerivation (finalAttrs: {
   };
 
   nativeBuildInputs = [ cmake ];
-  buildInputs = [ fastrtps fastcdr spdlog asio tinyxml-2 ];
+  buildInputs = [ fastrtps fastcdr asio tinyxml-2 ];
 
   cmakeFlags = [
     "-DUAGENT_SUPERBUILD=OFF"
     "-DUAGENT_USE_SYSTEM_FASTDDS=ON"
     "-DUAGENT_USE_SYSTEM_FASTCDR=ON"
-    "-DUAGENT_USE_SYSTEM_LOGGER=ON"
+    "-DUAGENT_LOGGER_PROFILE=OFF"
     "-DUAGENT_P2P_PROFILE=OFF"
     "-DUAGENT_BUILD_EXECUTABLE=ON"
   ];

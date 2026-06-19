@@ -4,7 +4,7 @@ orbit_mission:
     setpoint_rate_hz: 20.0
     prestream_cycles: 10
     wait_for_start: true
-    force_arm: false
+    force_arm: true
     takeoff_altitude_m: 6.0
     takeoff_acceptance_m: 0.4
     takeoff_timeout_s: 30.0

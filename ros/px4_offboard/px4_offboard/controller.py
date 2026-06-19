@@ -149,7 +149,14 @@ class OffboardController(Node):
 
     def command_arm(self):
         arm_p2 = FORCE_ARM_MAGIC if self.force_arm else 0.0
-        self._publish_command(VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM, param1=1.0, param2=arm_p2)
+        # PX4 commander only lets the 21196 force-arm magic bypass preflight
+        # checks when the command is not marked as external.
+        self._publish_command(
+            VehicleCommand.VEHICLE_CMD_COMPONENT_ARM_DISARM,
+            param1=1.0,
+            param2=arm_p2,
+            from_external=not self.force_arm,
+        )
 
     def on_active_start(self):
         """Mission hook called once when OFFBOARD setpoints become active."""
@@ -179,7 +186,10 @@ class OffboardController(Node):
         self.yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
 
     def _ack_cb(self, msg: VehicleCommandAck):
-        self.get_logger().debug(f"ack cmd={msg.command} result={msg.result}")
+        if msg.result != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
+            self.get_logger().warn(f"command rejected: cmd={msg.command} result={msg.result}")
+        else:
+            self.get_logger().debug(f"ack cmd={msg.command} result={msg.result}")
 
     def _start_cb(self, msg: Bool):
         if msg.data and not self._start_ok:
@@ -201,7 +211,7 @@ class OffboardController(Node):
         stale_us = int(max(1.0, self.status_stale_timeout_s) * 1_000_000)
         return (self._now_us() - self._last_status_us) <= stale_us
 
-    def _publish_command(self, command, **params):
+    def _publish_command(self, command, from_external=True, **params):
         m = VehicleCommand()
         m.command = int(command)
         for i in range(1, 8):
@@ -210,7 +220,7 @@ class OffboardController(Node):
         m.target_component = 1
         m.source_system = 1
         m.source_component = 1
-        m.from_external = True
+        m.from_external = bool(from_external)
         m.timestamp = int(Clock().now().nanoseconds / 1000)
         self._cmd_pub.publish(m)
 
@@ -274,11 +284,10 @@ class OffboardController(Node):
             self._prestream_count += 1
             if self._prestream_count >= self.prestream_cycles:
                 self._takeoff_started_us = self._now_us()
-                self.get_logger().info("commanding AUTO.TAKEOFF.")
-                self.command_arm()
-                self.command_takeoff()
+                self.get_logger().info("commanding OFFBOARD takeoff.")
+                self.command_offboard_mode()
                 self._last_command_us = self._now_us()
-                self.state = TAKEOFF
+                self.state = ENGAGE
 
         elif self.state == TAKEOFF:
             self._hold_setpoint()
