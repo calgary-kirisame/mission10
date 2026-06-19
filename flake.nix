@@ -37,9 +37,10 @@
         } // nixpkgs.lib.optionalAttrs pkgs.stdenv.isLinux {
           # ROS rim + sim development (Linux only since ros.cachix.org)
           #
-          # nix provides the ENVIRONMENT; colcon still builds the assembled
-          # workspace inside it (scripts/make_workspace.sh). Our packages
-          # never become nix derivations.
+          # nix provides the ENVIRONMENT; colcon builds at the repo root,
+          # discovering ros/* (incl. the vendored px4_msgs, synced from the
+          # PX4 fork by scripts/sync_px4_msgs.sh). Artifacts land in gitignored
+          # build/install/log. Our packages never become nix derivations.
           sim = pkgs.mkShell {
             name = "mission10-sim";
             packages = [

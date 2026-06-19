@@ -1,17 +1,14 @@
-# python
 __pycache__/
 *.pyc
 *.egg-info/
 .venv/
 
-# colcon (never assemble a workspace inside the repo, but belt-and-suspenders)
 build/
 install/
 log/
 
-# fetched assets + generated datasets (pins live in models/*/assets.lock)
+# assets + datasets
 models/*/assets/
 models/*/out/
 
-# os
 .DS_Store
