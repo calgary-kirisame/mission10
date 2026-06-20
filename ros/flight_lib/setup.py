@@ -14,7 +14,7 @@ setup(
     zip_safe=True,
     maintainer="calgary-kirisame",
     maintainer_email="131201352+calgary-kirisame@users.noreply.github.com",
-    description="Pure-math flight geometry: pinwheel orbit + hover/land profiles. No ROS, no PX4.",
+    description="Pure-math flight geometry: phased orbits + hover/land profiles. No ROS, no PX4.",
     license="MPL-2.0",
     entry_points={},
 )

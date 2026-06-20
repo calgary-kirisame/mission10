@@ -46,14 +46,16 @@ def build_sitl_cmd(*, instance_id, px4_dir, model, pose="", autostart=4001,
         env.append(f'PX4_GZ_MODEL_POSE="{pose}"')
     env_str = " ".join(env)
 
+    # exec the long-running binary so it inherits the shell's PID; that lets a
+    # ros2 launch SIGINT reach px4 directly instead of orphaning it behind bash.
     if instance_id == 0:
-        return f"cd {px4_dir} && PX4_GZ_WORLD={world} {env_str} make px4_sitl gz_{model}"
+        return f"cd {px4_dir} && PX4_GZ_WORLD={world} {env_str} exec make px4_sitl gz_{model}"
 
     build_dir = px4_build_dir(px4_dir)
     rootfs = os.path.join(build_dir, "rootfs", str(instance_id))
     etc = os.path.join(build_dir, "etc")
     return (
         f"mkdir -p {rootfs} && cd {rootfs} && "
-        f"{env_str} PX4_GZ_STANDALONE=1 PX4_SIM_MODEL=gz_{model} "
-        f"{px4_binary(px4_dir)} -i {instance_id} -d {etc}"
+        f"{env_str} GZ_IP=127.0.0.1 PX4_GZ_STANDALONE=1 PX4_SIM_MODEL=gz_{model} "
+        f"exec {px4_binary(px4_dir)} -i {instance_id} -d {etc}"
     )

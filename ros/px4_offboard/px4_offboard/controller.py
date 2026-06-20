@@ -115,6 +115,7 @@ class OffboardController(Node):
         self._last_log_us = 0
         self._last_command_us = 0
         self._takeoff_started_us = 0
+        self._link_acquired_fired = False
 
         self.state = WAIT_LINK
         self._timer = self.create_timer(1.0 / self.rate_hz, self._tick)
@@ -144,6 +145,16 @@ class OffboardController(Node):
     def command_return(self):
         self._publish_command(VehicleCommand.VEHICLE_CMD_NAV_RETURN_TO_LAUNCH)
 
+    def set_global_origin(self, lat, lon, alt=0.0):
+        # EKF2 takes this vehicle_command directly (EKF2.cpp), source-agnostic, so
+        # it works over XRCE-DDS without MAVLink. A global origin lets a local-only
+        # (EV/mocap) estimate produce a global position, which the auto modes
+        # (RTL/Land/Hold) and failsafes require. param5/6 are float64 (lat/lon).
+        self._publish_command(
+            VehicleCommand.VEHICLE_CMD_SET_GPS_GLOBAL_ORIGIN,
+            param5=lat, param6=lon, param7=alt,
+        )
+
     def command_offboard_mode(self):
         self._publish_command(VehicleCommand.VEHICLE_CMD_DO_SET_MODE, param1=1.0, param2=6.0)
 
@@ -157,6 +168,9 @@ class OffboardController(Node):
             param2=arm_p2,
             from_external=not self.force_arm,
         )
+
+    def on_link_acquired(self):
+        """Mission hook called once when PX4 telemetry first arrives (pre-arm)."""
 
     def on_active_start(self):
         """Mission hook called once when OFFBOARD setpoints become active."""
@@ -270,6 +284,9 @@ class OffboardController(Node):
 
         if self.state == WAIT_LINK:
             if self._link_alive():
+                if not self._link_acquired_fired:
+                    self._link_acquired_fired = True
+                    self.on_link_acquired()
                 self.state = WAIT_START if not self._start_ok else PRESTREAM
             else:
                 self._log_throttled("waiting for PX4 telemetry (MicroXRCEAgent/DDS up?)")

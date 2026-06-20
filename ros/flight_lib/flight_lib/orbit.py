@@ -1,4 +1,4 @@
-"""Pinwheel-orbit geometry for evenly-phased multi-drone rings.
+"""Ring-orbit geometry for evenly-phased multi-drone rings.
 
 Pure math: numpy in, setpoints out. No ROS, no PX4 — the offboard node is
 responsible for mapping these into a PX4 TrajectorySetpoint (NED).
@@ -18,8 +18,8 @@ converts, e.g.::
 (The uXRCE-DDS bridge does NOT auto-convert frames the way MAVROS did, so the
 node must do this explicitly.)
 
-Pinwheel
---------
+Shared ring
+-----------
 `n` drones share one circle of radius `R` about `center`, spaced by a constant
 phase 2*pi*i/n, all rotating at angular rate `omega` (rad/s). Because the
 spacing is uniform, the closest pair is always adjacent, so the minimum

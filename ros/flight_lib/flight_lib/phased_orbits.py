@@ -1,4 +1,4 @@
-"""Four-armed pinwheel geometry — per-drone overlapping orbit circles.
+"""Phased-orbits geometry — per-drone overlapping orbit circles.
 
 The qualifier pattern (RFD `proof-of-intelligent-flight` §2-3): `n` drones, each
 on its *own* circle, centers strung along a line and offset downrange, all of
@@ -6,11 +6,15 @@ radius `R`, all turning at the same rate `omega`, locked a constant `phase_step`
 apart. Unlike :mod:`flight_lib.orbit` (one shared ring), the circles overlap so
 flight paths intersect; collision is a timing problem the phase offset solves.
 
+Not a single rigid hub: the centers are spread along a line (`spacing` apart), so
+this is overlapping offset circles, not one wheel. The launch-relative frame
+forbids a shared hub (it would need all drones to spawn at one point), so the
+hub is sheared out along the spawn line.
+
 Frame convention
 ----------------
-Same right-handed z-up world frame as :mod:`flight_lib.orbit` (x east, y north,
-z up; yaw CCW about +z from +x, wrapped to (-pi, pi]). The consuming offboard
-node converts to PX4 NED.
+Right-handed z-up world frame (x east, y north, z up; yaw CCW about +z from +x,
+wrapped to (-pi, pi]). The consuming offboard node converts to PX4 NED.
 
 Layout
 ------
@@ -25,14 +29,14 @@ so the centers are `spacing` apart along x (east), all pushed `downrange` along
 Phase
 -----
 Drone `i` rides phase `phase0 + phase_step * i`. The default `phase0 = -pi/2`
-puts drone 0 at the bottom (line-side "S") edge of its circle at `t = 0`, so the
-default `phase_step = pi/2` reproduces the RFD §3 filmstrip exactly:
+puts drone 0 at the bottom (line-side "S") edge of its circle at `t = 0`.
 
-    t=0:   D0=S  D1=E  D2=N  D3=W      (S=line edge, E=+x, N=downrange edge, W=-x)
-    +1/4:  D0=E  D1=N  D2=W  D3=S
-
-A non-uniform schedule (e.g. the conservative `[0, pi, pi, 0]` fallback) is
-expressed by passing an explicit `phases` sequence instead of `phase_step`.
+Insertion
+---------
+:func:`phased_orbit_insertion` is the safe in-plane transition from a drone
+hovering at its circle *center* onto its circle at phase `phi_i`: radius grows
+`0 -> R` while the angle spins by `spin` (default +235 deg, validated to keep the
+4-drone min separation ~2.09 m in-plane, vs collision for a pure-radial push).
 
 Separation (closed form)
 ------------------------
@@ -63,10 +67,11 @@ import numpy as np
 from flight_lib.orbit import _yaw_for, wrap_angle
 
 __all__ = [
-    "pinwheel_centers",
-    "pinwheel_phases",
-    "pinwheel_setpoint",
-    "pinwheel_positions",
+    "phased_orbit_centers",
+    "phased_orbit_phases",
+    "phased_orbit_setpoint",
+    "phased_orbit_positions",
+    "phased_orbit_insertion",
     "separation_bounds",
     "pair_separation_bounds",
     "pair_min_separation",
@@ -77,9 +82,10 @@ __all__ = [
 
 DEFAULT_PHASE_STEP = np.pi / 2.0
 DEFAULT_PHASE0 = -np.pi / 2.0
+DEFAULT_INSERTION_SPIN = np.radians(235.0)
 
 
-def pinwheel_phases(n, *, phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None):
+def phased_orbit_phases(n, *, phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None):
     """Per-drone phase offsets as a length-`n` array.
 
     Uniform `phase0 + phase_step*i` unless an explicit `phases` sequence is given
@@ -93,7 +99,7 @@ def pinwheel_phases(n, *, phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, 
     return phase0 + phase_step * np.arange(n)
 
 
-def pinwheel_centers(n, *, spacing=3.0, downrange=4.6, base=(0.0, 0.0)):
+def phased_orbit_centers(n, *, spacing=3.0, downrange=4.6, base=(0.0, 0.0)):
     """Orbit centers as an (n, 2) array of (x, y) in the z-up world frame."""
     if n < 1:
         raise ValueError("need at least 1 drone")
@@ -102,10 +108,10 @@ def pinwheel_centers(n, *, spacing=3.0, downrange=4.6, base=(0.0, 0.0)):
     return np.column_stack([bx + spacing * i, np.full(n, by + downrange)])
 
 
-def pinwheel_setpoint(t, index, n, radius, omega, *,
-                      spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
-                      phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None,
-                      yaw_mode="inward", fixed_yaw=0.0):
+def phased_orbit_setpoint(t, index, n, radius, omega, *,
+                          spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
+                          phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None,
+                          yaw_mode="inward", fixed_yaw=0.0):
     """Position and yaw for drone `index` of `n` at time `t`.
 
     Returns ``(position, yaw)`` where ``position`` is an (x, y, z) numpy array in
@@ -116,7 +122,7 @@ def pinwheel_setpoint(t, index, n, radius, omega, *,
     bx, by = base
     cx = bx + spacing * index
     cy = by + downrange
-    phase = pinwheel_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
+    phase = phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
     theta = omega * t + phase
     pos = np.array([
         cx + radius * np.cos(theta),
@@ -126,15 +132,45 @@ def pinwheel_setpoint(t, index, n, radius, omega, *,
     return pos, float(_yaw_for(theta, yaw_mode, fixed_yaw))
 
 
-def pinwheel_positions(t, n, radius, omega, *,
-                       spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
-                       phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None):
+def phased_orbit_insertion(s, index, n, radius, *,
+                           spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
+                           spin=DEFAULT_INSERTION_SPIN,
+                           phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None,
+                           yaw_mode="inward", fixed_yaw=0.0):
+    """Spiral insertion for drone `index` at progress `s` in [0, 1].
+
+    `s=0` is the circle center (radius 0); `s=1` is the orbit phase `phi_i` at
+    radius `R`. Radius grows linearly while the angle spins from `phi_i - spin`
+    to `phi_i`, so the path curls the same rotational way as the orbit. Returns
+    ``(position, yaw)`` in the z-up world frame; call with `s` running 1 -> 0 for
+    the reverse (orbit -> center) transition.
+    """
+    if not 0 <= index < n:
+        raise ValueError(f"index {index} out of range for n={n}")
+    u = float(np.clip(s, 0.0, 1.0))
+    bx, by = base
+    cx = bx + spacing * index
+    cy = by + downrange
+    phi = phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
+    theta = phi - spin * (1.0 - u)
+    r = radius * u
+    pos = np.array([
+        cx + r * np.cos(theta),
+        cy + r * np.sin(theta),
+        altitude,
+    ])
+    return pos, float(_yaw_for(theta, yaw_mode, fixed_yaw))
+
+
+def phased_orbit_positions(t, n, radius, omega, *,
+                           spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
+                           phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None):
     """All `n` drone positions at time `t` as an (n, 3) array (viz / checks)."""
     if n < 1:
         raise ValueError("need at least 1 drone")
     bx, by = base
     i = np.arange(n)
-    theta = omega * t + pinwheel_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)
+    theta = omega * t + phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)
     return np.column_stack([
         bx + spacing * i + radius * np.cos(theta),
         by + downrange + radius * np.sin(theta),

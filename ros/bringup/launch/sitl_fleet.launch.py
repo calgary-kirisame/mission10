@@ -10,19 +10,49 @@ TTY). Run it in its own terminal when you want a gated start:
 from __future__ import annotations
 
 import os
+import subprocess
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, TimerAction
+from launch.actions import DeclareLaunchArgument, ExecuteProcess, OpaqueFunction, RegisterEventHandler
+from launch.event_handlers import OnShutdown
 from launch.substitutions import LaunchConfiguration
 
-from bringup.sitl_spawn import build_sitl_cmd, load_fleet
+from bringup.sitl_spawn import build_sitl_cmd, load_fleet, px4_build_dir
 
 
-def _proc(command, delay_s=0.0):
-    if delay_s and delay_s > 0:
-        command = f"sleep {delay_s}; {command}"
+def _proc(command):
     return ExecuteProcess(cmd=["bash", "-lc", command], output="screen")
+
+
+def _reaper(bin_px4):
+    """Synchronous on-shutdown reaper. exec lets a SIGINT reach px4 directly, but
+    instance 0's `make` forks a gz server px4 can't take with it; a launch SIGINT
+    can also miss children when the group is split. Kill stray px4/gz in-process
+    on shutdown (an OpaqueFunction runs synchronously; spawning a fresh
+    ExecuteProcess here is unreliable while the event loop is tearing down)."""
+    def _kill(_context, *_args, **_kwargs):
+        for pat in (bin_px4, "gz sim"):
+            # returns 1 when nothing matches; that is the normal no-op case
+            subprocess.run(["pkill", "-9", "-f", pat], check=False)
+        return []
+    return _kill
+
+
+def _gz_gated(command, world, timeout_s=60.0):
+    """Gate a standalone instance on the gz world clock instead of a fixed sleep.
+
+    PX4_GZ_STANDALONE retries the spawn every 2 s, so once the clock topic is up
+    every gated instance can spawn at once. Fail-fast: error out if gz never
+    comes up within timeout_s rather than hanging forever.
+    """
+    tries = max(1, int(timeout_s / 0.5))
+    grep = rf"gz topic -l 2>/dev/null | grep -q '/world/{world}/clock'"
+    gate = (
+        f"for _ in $(seq 1 {tries}); do {grep} && break; sleep 0.5; done; "
+        f"{grep} || {{ echo 'gz world clock not up after {timeout_s:g}s' >&2; exit 1; }}"
+    )
+    return _proc(f"{gate}; {command}")
 
 
 def _setup(context, *args, **kwargs):
@@ -41,7 +71,8 @@ def _setup(context, *args, **kwargs):
     if num > len(vehicles):
         raise RuntimeError(f"num_vehicles={num} exceeds {len(vehicles)} configured vehicles.")
 
-    actions = [_proc(f"MicroXRCEAgent udp4 -p {fleet.get('agent_port', 8888)}")]
+    world = fleet.get("world", "default")
+    actions = [_proc(f"exec MicroXRCEAgent udp4 -p {fleet.get('agent_port', 8888)}")]
 
     for i in range(num):
         v = vehicles[i]
@@ -51,13 +82,19 @@ def _setup(context, *args, **kwargs):
             model=fleet["model"],
             pose=v.get("pose", ""),
             autostart=fleet.get("autostart", 4001),
-            world=fleet.get("world", "default"),
+            world=world,
             home_gps=fleet.get("home_gps"),
             dds_ns=v.get("namespace", f"px4_{i}"),
         )
-        # instance 0 launches gz; standalone instances wait for it to come up
-        delay = 0.0 if i == 0 else 8.0 + 5.0 * (i - 1)
-        actions.append(TimerAction(period=0.25 * (i + 1), actions=[_proc(cmd, delay_s=delay)]))
+        # instance 0 launches gz; standalone instances gate on the world clock
+        # and then spawn concurrently (each its own uniquely-named model).
+        actions.append(_proc(cmd) if i == 0 else _gz_gated(cmd, world))
+
+    # Reap any stray px4/gz on shutdown so reruns start clean instead of fighting
+    # orphaned duplicates.
+    bin_px4 = os.path.join(px4_build_dir(px4_dir), "bin", "px4")
+    actions.append(RegisterEventHandler(
+        OnShutdown(on_shutdown=[OpaqueFunction(function=_reaper(bin_px4))])))
 
     return actions
 
