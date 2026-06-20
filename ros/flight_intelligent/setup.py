@@ -22,6 +22,7 @@ setup(
     entry_points={
         "console_scripts": [
             "orbit_mission = flight_intelligent.orbit_mission:main",
+            "pinwheel_mission = flight_intelligent.pinwheel_mission:main",
         ],
     },
 )

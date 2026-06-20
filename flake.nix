@@ -72,6 +72,14 @@
             shellHook = ''
               export CMAKE_PREFIX_PATH="''${AMENT_PREFIX_PATH}''${CMAKE_PREFIX_PATH:+:}''${CMAKE_PREFIX_PATH:-}"
               export QT_QPA_PLATFORM=xcb
+              # PX4 SITL fork checkout (the fork's flake owns the binary; this
+              # shell only points at it). Sibling of the mission10 repo by
+              # convention; pre-set PX4_DIR to override.
+              if [ -z "''${PX4_DIR:-}" ]; then
+                export PX4_DIR="$(cd "$(git rev-parse --show-toplevel 2>/dev/null)/.." 2>/dev/null && pwd)/PX4-Autopilot"
+              fi
+              [ -x "$PX4_DIR/build/px4_sitl_default/bin/px4" ] || \
+                echo "note: no PX4 SITL binary under PX4_DIR=$PX4_DIR (build the fork, or set PX4_DIR)"
             '';
             # TODO(first sim session):
             # - PX4 SITL binary: belongs to the PX4-Autopilot fork's flake,

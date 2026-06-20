@@ -9,7 +9,10 @@ home_gps:
   lon: -83.7487304
   alt_m: 0.0
 vehicles:
+  # spawn on the hover spots: 3 m apart on the line (rules: 10 ft separation).
+  # each drone's launch-relative orbit is identical (center 4.6 m downrange),
+  # differing only by phase; spawn offsets reconstruct the world pinwheel.
   - {namespace: px4_0, pose: "0,0,0,0,0,0"}
-  - {namespace: px4_1, pose: "5,0,0,0,0,0"}
-  - {namespace: px4_2, pose: "10,0,0,0,0,0"}
-  - {namespace: px4_3, pose: "15,0,0,0,0,0"}
+  - {namespace: px4_1, pose: "3,0,0,0,0,0"}
+  - {namespace: px4_2, pose: "6,0,0,0,0,0"}
+  - {namespace: px4_3, pose: "9,0,0,0,0,0"}
