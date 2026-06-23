@@ -14,13 +14,29 @@ from flight_lib.phased_orbits import (
     pair_separation_swing,
     phased_orbit_centers,
     phased_orbit_insertion,
+    phased_orbit_insertion_velocity,
     phased_orbit_phases,
     phased_orbit_positions,
     phased_orbit_setpoint,
+    phased_orbit_velocity,
     separation_bounds,
     schedule_min_separation,
 )
 from flight_lib.profiles import hover_setpoint, land_duration, land_setpoint
+from flight_lib.deconflict import (
+    closest_point_of_approach,
+    follower_phase_rate,
+    phase_deconflict_rate,
+    reflex_velocity,
+)
+from flight_lib.bvc import (
+    buffered_uncertainty_halfspaces,
+    buffered_uncertainty_voronoi_clip,
+    buffered_voronoi_clip,
+    buffered_voronoi_halfspaces,
+    normal_uncertainty_buffer,
+)
+from flight_lib.rel_localization import RelativePositionEKF, gnss_common_mode
 
 __all__ = [
     "min_separation",
@@ -31,8 +47,10 @@ __all__ = [
     "phased_orbit_centers",
     "phased_orbit_phases",
     "phased_orbit_setpoint",
+    "phased_orbit_velocity",
     "phased_orbit_positions",
     "phased_orbit_insertion",
+    "phased_orbit_insertion_velocity",
     "separation_bounds",
     "pair_separation_bounds",
     "pair_min_separation",
@@ -42,4 +60,15 @@ __all__ = [
     "hover_setpoint",
     "land_setpoint",
     "land_duration",
+    "closest_point_of_approach",
+    "follower_phase_rate",
+    "phase_deconflict_rate",
+    "reflex_velocity",
+    "buffered_voronoi_clip",
+    "buffered_voronoi_halfspaces",
+    "buffered_uncertainty_voronoi_clip",
+    "buffered_uncertainty_halfspaces",
+    "normal_uncertainty_buffer",
+    "RelativePositionEKF",
+    "gnss_common_mode",
 ]

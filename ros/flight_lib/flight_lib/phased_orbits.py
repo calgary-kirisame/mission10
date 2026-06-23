@@ -70,8 +70,10 @@ __all__ = [
     "phased_orbit_centers",
     "phased_orbit_phases",
     "phased_orbit_setpoint",
+    "phased_orbit_velocity",
     "phased_orbit_positions",
     "phased_orbit_insertion",
+    "phased_orbit_insertion_velocity",
     "separation_bounds",
     "pair_separation_bounds",
     "pair_min_separation",
@@ -132,6 +134,18 @@ def phased_orbit_setpoint(t, index, n, radius, omega, *,
     return pos, float(_yaw_for(theta, yaw_mode, fixed_yaw))
 
 
+def phased_orbit_velocity(t, index, n, radius, omega, *,
+                          spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
+                          phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None,
+                          yaw_mode="inward", fixed_yaw=0.0):
+    """Velocity of :func:`phased_orbit_setpoint` in the z-up world frame."""
+    if not 0 <= index < n:
+        raise ValueError(f"index {index} out of range for n={n}")
+    phase = phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
+    theta = omega * t + phase
+    return np.array([-radius * omega * np.sin(theta), radius * omega * np.cos(theta), 0.0])
+
+
 def phased_orbit_insertion(s, index, n, radius, *,
                            spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
                            spin=DEFAULT_INSERTION_SPIN,
@@ -160,6 +174,26 @@ def phased_orbit_insertion(s, index, n, radius, *,
         altitude,
     ])
     return pos, float(_yaw_for(theta, yaw_mode, fixed_yaw))
+
+
+def phased_orbit_insertion_velocity(s, index, n, radius, *, s_dot,
+                                    spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
+                                    spin=DEFAULT_INSERTION_SPIN,
+                                    phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0,
+                                    phases=None, yaw_mode="inward", fixed_yaw=0.0):
+    """Velocity of :func:`phased_orbit_insertion` for progress rate ``s_dot``."""
+    if not 0 <= index < n:
+        raise ValueError(f"index {index} out of range for n={n}")
+    u = float(np.clip(s, 0.0, 1.0))
+    phi = phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
+    theta = phi - spin * (1.0 - u)
+    r = radius * u
+    theta_dot = spin * float(s_dot)
+    return np.array([
+        radius * float(s_dot) * np.cos(theta) - r * np.sin(theta) * theta_dot,
+        radius * float(s_dot) * np.sin(theta) + r * np.cos(theta) * theta_dot,
+        0.0,
+    ])
 
 
 def phased_orbit_positions(t, n, radius, omega, *,
