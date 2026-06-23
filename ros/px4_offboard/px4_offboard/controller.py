@@ -29,12 +29,15 @@ from px4_msgs.msg import (
     VehicleAttitude,
     VehicleCommand,
     VehicleCommandAck,
+    VehicleGlobalPosition,
     VehicleLocalPosition,
     VehicleStatus,
 )
 from std_msgs.msg import Bool
 
 FORCE_ARM_MAGIC = 21196.0
+ORIGIN_RESEND_INTERVAL_S = 0.5
+ORIGIN_CONFIRM_TIMEOUT_S = 20.0
 ARMING_STATE_ARMED = 2
 
 WAIT_LINK = "wait_link"
@@ -96,6 +99,8 @@ class OffboardController(Node):
         self.create_subscription(VehicleLocalPosition, self._topic("out/vehicle_local_position_v1"), self._pos_cb, sensor_qos)
         self.create_subscription(VehicleAttitude, self._topic("out/vehicle_attitude"), self._att_cb, sensor_qos)
         self.create_subscription(VehicleCommandAck, self._topic("out/vehicle_command_ack"), self._ack_cb, sensor_qos)
+        self.create_subscription(VehicleGlobalPosition, self._topic("out/vehicle_global_position"), self._gpos_cb, sensor_qos)
+        self.create_subscription(VehicleGlobalPosition, self._topic("out/vehicle_global_position_v1"), self._gpos_cb, sensor_qos)
 
         self.create_subscription(Bool, "start_mission", self._start_cb, 10)
         self.create_subscription(Bool, "end_mission", self._end_cb, 10)
@@ -104,6 +109,7 @@ class OffboardController(Node):
         self.arm_state = VehicleStatus.ARMING_STATE_DISARMED
         self.failsafe = False
         self.x = self.y = self.z = 0.0  # NED metres
+        self.vx = self.vy = self.vz = 0.0  # NED m/s
         self.yaw = 0.0
         self._launch_xy = None
 
@@ -116,6 +122,12 @@ class OffboardController(Node):
         self._last_command_us = 0
         self._takeoff_started_us = 0
         self._link_acquired_fired = False
+        self._heartbeat_velocity = False
+        self._global_pos_valid = False
+        self._pending_origin = None
+        self._origin_send_us = 0
+        self._origin_start_us = 0
+        self._origin_confirmed = False
 
         self.state = WAIT_LINK
         self._timer = self.create_timer(1.0 / self.rate_hz, self._tick)
@@ -150,6 +162,34 @@ class OffboardController(Node):
         # it works over XRCE-DDS without MAVLink. A global origin lets a local-only
         # (EV/mocap) estimate produce a global position, which the auto modes
         # (RTL/Land/Hold) and failsafes require. param5/6 are float64 (lat/lon).
+        # Fire-and-forget races EKF2 init (a command sent before ekf2 is up is
+        # dropped, leaving no global position and RTL unavailable), so latch it and
+        # re-send from _tick until vehicle_global_position reports lat_lon_valid.
+        self._pending_origin = (float(lat), float(lon), float(alt))
+        self._origin_start_us = self._now_us()
+        self._origin_send_us = 0
+        self._origin_confirmed = False
+
+    def _send_pending_origin(self):
+        if self._pending_origin is None:
+            return
+        if self._global_pos_valid:
+            self._pending_origin = None
+            if not self._origin_confirmed:
+                self._origin_confirmed = True
+                self.get_logger().info("EKF global origin accepted (lat_lon_valid).")
+            return
+        elapsed = (self._now_us() - self._origin_start_us) / 1_000_000.0
+        if elapsed > ORIGIN_CONFIRM_TIMEOUT_S:
+            raise RuntimeError(
+                f"EKF global origin not accepted after {elapsed:.0f}s "
+                f"(vehicle_global_position.lat_lon_valid still false); RTL/Land unavailable."
+            )
+        now = self._now_us()
+        if now - self._origin_send_us < ORIGIN_RESEND_INTERVAL_S * 1_000_000:
+            return
+        self._origin_send_us = now
+        lat, lon, alt = self._pending_origin
         self._publish_command(
             VehicleCommand.VEHICLE_CMD_SET_GPS_GLOBAL_ORIGIN,
             param5=lat, param6=lon, param7=alt,
@@ -192,12 +232,16 @@ class OffboardController(Node):
 
     def _pos_cb(self, msg: VehicleLocalPosition):
         self.x, self.y, self.z = msg.x, msg.y, msg.z
+        self.vx, self.vy, self.vz = msg.vx, msg.vy, msg.vz
         if self._launch_xy is None and all(math.isfinite(v) for v in (msg.x, msg.y)):
             self._launch_xy = (float(msg.x), float(msg.y))
 
     def _att_cb(self, msg: VehicleAttitude):
         w, x, y, z = msg.q  # PX4 order w, x, y, z
         self.yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+
+    def _gpos_cb(self, msg: VehicleGlobalPosition):
+        self._global_pos_valid = bool(msg.lat_lon_valid)
 
     def _ack_cb(self, msg: VehicleCommandAck):
         if msg.result != VehicleCommandAck.VEHICLE_CMD_RESULT_ACCEPTED:
@@ -244,7 +288,9 @@ class OffboardController(Node):
             self._last_command_us = now
             self._publish_command(command, **params)
 
-    def _publish_heartbeat(self, position=True, velocity=False):
+    def _publish_heartbeat(self, position=True, velocity=None):
+        if velocity is None:
+            velocity = self._heartbeat_velocity
         off = OffboardControlMode()
         off.timestamp = int(Clock().now().nanoseconds / 1000)
         off.position = position
@@ -255,11 +301,24 @@ class OffboardController(Node):
         self._offboard_pub.publish(off)
 
     def publish_position_setpoint(self, x, y, z, yaw=None, yawspeed=0.0):
+        self._heartbeat_velocity = False
         traj = TrajectorySetpoint()
         traj.timestamp = int(Clock().now().nanoseconds / 1000)
         traj.position[0], traj.position[1], traj.position[2] = float(x), float(y), float(z)
         for i in range(3):
             traj.velocity[i] = float("nan")
+            traj.acceleration[i] = float("nan")
+        traj.yaw = wrap_pi(self.yaw if yaw is None else float(yaw))
+        traj.yawspeed = float(yawspeed)
+        self._traj_pub.publish(traj)
+
+    def publish_position_velocity_setpoint(self, x, y, z, vx, vy, vz, yaw=None, yawspeed=0.0):
+        self._heartbeat_velocity = True
+        traj = TrajectorySetpoint()
+        traj.timestamp = int(Clock().now().nanoseconds / 1000)
+        traj.position[0], traj.position[1], traj.position[2] = float(x), float(y), float(z)
+        traj.velocity[0], traj.velocity[1], traj.velocity[2] = float(vx), float(vy), float(vz)
+        for i in range(3):
             traj.acceleration[i] = float("nan")
         traj.yaw = wrap_pi(self.yaw if yaw is None else float(yaw))
         traj.yawspeed = float(yawspeed)
@@ -278,6 +337,7 @@ class OffboardController(Node):
     # state machine
 
     def _tick(self):
+        self._send_pending_origin()
         # OFFBOARD drops without an OffboardControlMode stream at >=2 Hz
         if self.state in (PRESTREAM, TAKEOFF, ENGAGE, ACTIVE):
             self._publish_heartbeat()
@@ -352,8 +412,14 @@ class OffboardController(Node):
             if sp is None:
                 self._hold_setpoint()
             else:
-                x, y, z, yaw = sp
-                self.publish_position_setpoint(x, y, z, yaw)
+                if len(sp) == 4:
+                    x, y, z, yaw = sp
+                    self.publish_position_setpoint(x, y, z, yaw)
+                elif len(sp) == 7:
+                    x, y, z, yaw, vx, vy, vz = sp
+                    self.publish_position_velocity_setpoint(x, y, z, vx, vy, vz, yaw)
+                else:
+                    raise ValueError("setpoint must be (x, y, z, yaw) or (x, y, z, yaw, vx, vy, vz)")
 
         elif self.state == RETURNING:
             if self._end_requested:
