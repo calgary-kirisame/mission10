@@ -21,6 +21,7 @@ setup(
     entry_points={
         "console_scripts": [
             "gt_to_ev = sim_truth_ev.gt_to_ev:main",
+            "world_truth_to_odom = sim_truth_ev.world_truth_to_odom:main",
         ],
     },
 )

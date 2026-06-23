@@ -6,7 +6,7 @@ from px4_msgs.msg import VehicleOdometry
 from rclpy.node import Node
 from rclpy.qos import QoSHistoryPolicy, QoSProfile, QoSReliabilityPolicy
 
-from sim_truth_ev.frames import enu_vector_to_ned, flu_vector_to_frd, ros_enu_flu_to_px4_ned_frd
+from sim_truth_ev.frames import enu_vector_to_ned, ros_enu_flu_to_px4_ned_frd
 
 
 class GroundTruthToEv(Node):
@@ -17,14 +17,12 @@ class GroundTruthToEv(Node):
         self.declare_parameter("publish", True)
         self.declare_parameter("position_variance", 0.05)
         self.declare_parameter("orientation_variance", 0.02)
-        self.declare_parameter("velocity_variance", 0.05)
 
         self.ns = self.get_parameter("vehicle_namespace").value.strip("/")
         odom_topic = str(self.get_parameter("odom_topic").value)
         self.publish_ev = bool(self.get_parameter("publish").value)
         self.position_variance = float(self.get_parameter("position_variance").value)
         self.orientation_variance = float(self.get_parameter("orientation_variance").value)
-        self.velocity_variance = float(self.get_parameter("velocity_variance").value)
 
         qos = QoSProfile(
             reliability=QoSReliabilityPolicy.BEST_EFFORT,
@@ -45,7 +43,6 @@ class GroundTruthToEv(Node):
 
     def _odom_cb(self, msg: Odometry):
         pose = msg.pose.pose
-        twist = msg.twist.twist
 
         out = VehicleOdometry()
         now_us = self._now_us()
@@ -54,7 +51,9 @@ class GroundTruthToEv(Node):
         sample_us = stamp.sec * 1_000_000 + stamp.nanosec // 1000
         out.timestamp_sample = sample_us if sample_us > 0 else now_us
         out.pose_frame = VehicleOdometry.POSE_FRAME_NED
-        out.velocity_frame = VehicleOdometry.VELOCITY_FRAME_BODY_FRD
+        # Mocap/QTM gives pose only; the EV airframe (EKF2_EV_CTRL=11) does not fuse
+        # EV velocity. Mark velocity absent (NaN + UNKNOWN frame) per PX4 convention.
+        out.velocity_frame = VehicleOdometry.VELOCITY_FRAME_UNKNOWN
 
         out.position[:] = enu_vector_to_ned((pose.position.x, pose.position.y, pose.position.z))
         out.q[:] = ros_enu_flu_to_px4_ned_frd((
@@ -63,15 +62,12 @@ class GroundTruthToEv(Node):
             pose.orientation.z,
             pose.orientation.w,
         ))
-        out.velocity[:] = flu_vector_to_frd((twist.linear.x, twist.linear.y, twist.linear.z))
-        out.angular_velocity[:] = flu_vector_to_frd((
-            twist.angular.x,
-            twist.angular.y,
-            twist.angular.z,
-        ))
+        nan = float("nan")
+        out.velocity[:] = [nan, nan, nan]
+        out.angular_velocity[:] = [nan, nan, nan]
         out.position_variance[:] = [self.position_variance] * 3
         out.orientation_variance[:] = [self.orientation_variance] * 3
-        out.velocity_variance[:] = [self.velocity_variance] * 3
+        out.velocity_variance[:] = [nan, nan, nan]
         out.reset_counter = 0
         out.quality = 100 if self.publish_ev else 0
 
