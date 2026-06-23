@@ -1,0 +1,23 @@
+/**:
+  ros__parameters:
+    setpoint_rate_hz: 20.0
+    prestream_cycles: 10
+    wait_for_start: true
+    force_arm: true
+    takeoff_altitude_m: 6.0
+    cruise_speed_mps: 1.5
+    arm_margin_s: 12.0
+    transit_time_s: 8.0
+    goal_acceptance_m: 0.4
+    hold_at_goal_s: 2.0
+    bvc_enabled: true
+    bvc_safety_radius_m: 1.5
+    bvc_delta: 0.1
+    bvc_pos_std_radial_m: 0.1
+    bvc_pos_std_tangential_m: 0.5
+    estimator_enabled: false
+    gnss_indep_std_m: 0.3
+    gnss_common_amp_m: 2.5
+    range_noise_std_m: 0.1
+    vel_noise_std_m: 0.3
+    estimator_seed: 7

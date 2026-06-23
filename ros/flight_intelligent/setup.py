@@ -23,6 +23,8 @@ setup(
         "console_scripts": [
             "orbit_mission = flight_intelligent.orbit_mission:main",
             "phased_orbits_mission = flight_intelligent.phased_orbits_mission:main",
+            "phase_reflex_mission = flight_intelligent.phase_reflex_mission:main",
+            "bvc_transit_mission = flight_intelligent.bvc_transit_mission:main",
         ],
     },
 )

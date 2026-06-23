@@ -1,0 +1,20 @@
+/**:
+  ros__parameters:
+    setpoint_rate_hz: 20.0
+    prestream_cycles: 10
+    wait_for_start: true
+    force_arm: true
+    takeoff_altitude_m: 6.0
+    orbit_radius_m: 4.6
+    orbit_speed_mps: 2.0
+    arm_margin_s: 12.0
+    to_center_time_s: 6.0
+    spread_time_s: 12.0
+    tighten_time_s: 12.0
+    d_reflex_m: 2.0
+    reflex_clearance_m: 2.25
+    deconflict_clearance_m: 4.0
+    deconflict_horizon_s: 6.0
+    deconflict_max_scale: 2.0
+    deconflict_min_scale: 0.3
+    imminent_m: 1.0

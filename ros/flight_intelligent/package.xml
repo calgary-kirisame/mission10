@@ -12,6 +12,7 @@
   <depend>std_msgs</depend>
   <depend>px4_offboard</depend>
   <depend>flight_lib</depend>
+  <depend>flight_interfaces</depend>
 
   <export>
     <build_type>ament_python</build_type>

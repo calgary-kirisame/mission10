@@ -37,7 +37,10 @@ import math
 import rclpy
 from std_msgs.msg import Bool
 
-from flight_lib import phased_orbit_insertion, phased_orbit_setpoint
+from flight_lib import (
+    phased_orbit_insertion,
+    phased_orbit_setpoint,
+)
 from px4_offboard.controller import OffboardController, wrap_pi
 
 
