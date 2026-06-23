@@ -58,6 +58,16 @@ def test_setpoint_matches_positions():
         assert pos[:2] == pytest.approx(grid[i, :2])
 
 
+def test_orbit_velocity_matches_finite_difference():
+    t, omega, dt = 1.3, 0.43, 1e-5
+    for i in range(N):
+        before, _ = po.phased_orbit_setpoint(t - dt, i, N, R, omega, **SCHEDULE)
+        after, _ = po.phased_orbit_setpoint(t + dt, i, N, R, omega, **SCHEDULE)
+        numeric = (after - before) / (2.0 * dt)
+        analytic = po.phased_orbit_velocity(t, i, N, R, omega, **SCHEDULE)
+        assert analytic == pytest.approx(numeric, abs=1e-5)
+
+
 def test_insertion_endpoints_match_orbit():
     omega = 0.43
     for i in range(N):
@@ -67,6 +77,17 @@ def test_insertion_endpoints_match_orbit():
         orbit0, _ = po.phased_orbit_setpoint(0.0, i, N, R, omega, **SCHEDULE)
         assert start[:2] == pytest.approx(center)
         assert end[:2] == pytest.approx(orbit0[:2])
+
+
+def test_insertion_velocity_matches_finite_difference():
+    s, s_dot, dt = 0.4, 0.1, 1e-5
+    for i in range(N):
+        before, _ = po.phased_orbit_insertion(s - s_dot * dt, i, N, R, **SCHEDULE)
+        after, _ = po.phased_orbit_insertion(s + s_dot * dt, i, N, R, **SCHEDULE)
+        numeric = (after - before) / (2.0 * dt)
+        analytic = po.phased_orbit_insertion_velocity(
+            s, i, N, R, s_dot=s_dot, **SCHEDULE)
+        assert analytic == pytest.approx(numeric, abs=1e-5)
 
 
 def test_in_phase_lockstep_is_safe():
