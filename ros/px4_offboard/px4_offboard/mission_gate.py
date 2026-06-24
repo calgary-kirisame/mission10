@@ -1,7 +1,9 @@
-"""Keyboard/topic mission gate. Publishes Bool on start_mission and end_mission.
+"""Keyboard/topic mission gate. Publishes Bool on start_mission, begin_orbit,
+and end_mission.
 
-ENTER or "start" begins the mission; "terminate" commands landing. Topics are
-relative, so launch remapping/namespacing decides who hears them.
+ENTER or "start" arms + takes off; "orbit" begins circling; "terminate" commands
+landing. Topics are relative, so launch remapping/namespacing decides who hears
+them.
 """
 from __future__ import annotations
 
@@ -17,10 +19,12 @@ class MissionGate(Node):
     def __init__(self):
         super().__init__("mission_gate")
         self._start_pub = self.create_publisher(Bool, "start_mission", 10)
+        self._orbit_pub = self.create_publisher(Bool, "begin_orbit", 10)
         self._end_pub = self.create_publisher(Bool, "end_mission", 10)
         self._started = False
+        self._orbited = False
         self._ended = False
-        print("Mission gate ready. ENTER/'start' to begin, 'terminate' to land.")
+        print("Mission gate ready. ENTER/'start' takeoff, 'orbit' circle, 'terminate' land.")
 
     def trigger_start(self, source: str):
         if self._started:
@@ -28,6 +32,13 @@ class MissionGate(Node):
         self._started = True
         self.get_logger().info(f"start triggered by {source}.")
         self._start_pub.publish(Bool(data=True))
+
+    def trigger_orbit(self, source: str):
+        if self._orbited:
+            return
+        self._orbited = True
+        self.get_logger().info(f"begin_orbit triggered by {source}.")
+        self._orbit_pub.publish(Bool(data=True))
 
     def trigger_end(self, source: str):
         if self._ended:
@@ -50,10 +61,12 @@ def main(args=None):
                 command = sys.stdin.readline().rstrip("\n").strip().lower()
                 if command in ("", "start", "start mission"):
                     node.trigger_start("keyboard")
+                elif command in ("orbit", "begin", "begin orbit", "circle"):
+                    node.trigger_orbit("keyboard")
                 elif command in ("terminate", "terminate mission", "land"):
                     node.trigger_end("keyboard")
                 else:
-                    print("Unknown command. ENTER/start to begin, terminate to land.")
+                    print("Unknown command. ENTER/start takeoff, orbit circle, terminate land.")
             rclpy.spin_once(node, timeout_sec=0.0)
     except KeyboardInterrupt:
         pass

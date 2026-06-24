@@ -64,7 +64,7 @@ from __future__ import annotations
 
 import numpy as np
 
-from flight_lib.orbit import _yaw_for, wrap_angle
+from flight_lib.orbit import _yaw_for
 
 __all__ = [
     "phased_orbit_centers",
@@ -74,6 +74,8 @@ __all__ = [
     "phased_orbit_positions",
     "phased_orbit_insertion",
     "phased_orbit_insertion_velocity",
+    "phased_orbit_peeloff",
+    "peeloff_duration",
     "separation_bounds",
     "pair_separation_bounds",
     "pair_min_separation",
@@ -113,8 +115,20 @@ def phased_orbit_centers(n, *, spacing=3.0, downrange=4.6, base=(0.0, 0.0)):
 def phased_orbit_setpoint(t, index, n, radius, omega, *,
                           spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
                           phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None,
+                          mod_amp=0.0, mod_phase=0.0,
                           yaw_mode="inward", fixed_yaw=0.0):
     """Position and yaw for drone `index` of `n` at time `t`.
+
+    With `mod_amp` != 0 the angle carries a non-steady (time-varying speed)
+    modulation ``mod_amp * (sin(ω t + mod_phase) − sin(mod_phase))``: the drone
+    speeds up and slows along its circle instead of turning at constant rate.
+    Per-drone (`mod_amp`, `mod_phase`) are chosen so the four phase off each
+    other's path-crossings, lifting the orbit min separation above the
+    constant-speed floor on the same circles and revolution count (asserted in
+    test_modulation_lifts_min_separation). The ``− sin(mod_phase)`` term zeroes
+    the modulation at ``t = 0``, so the orbit joins the insertion (which ends at
+    the steady phase) without a jump. ``|mod_amp| < 1`` keeps the angular rate
+    positive.
 
     Returns ``(position, yaw)`` where ``position`` is an (x, y, z) numpy array in
     the z-up world frame and ``yaw`` is a scalar in (-pi, pi].
@@ -125,7 +139,8 @@ def phased_orbit_setpoint(t, index, n, radius, omega, *,
     cx = bx + spacing * index
     cy = by + downrange
     phase = phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
-    theta = omega * t + phase
+    theta = (omega * t + phase
+             + mod_amp * (np.sin(omega * t + mod_phase) - np.sin(mod_phase)))
     pos = np.array([
         cx + radius * np.cos(theta),
         cy + radius * np.sin(theta),
@@ -194,6 +209,61 @@ def phased_orbit_insertion_velocity(s, index, n, radius, *, s_dot,
         radius * float(s_dot) * np.sin(theta) + r * np.cos(theta) * theta_dot,
         0.0,
     ])
+
+
+DEFAULT_PEEL_SPIN = np.pi / 2.0
+
+
+def peeloff_duration(n, *, lead_in=0.5, stagger=3.0, peel_duration=4.0):
+    """Total return time for the staggered peel-off of `n` drones."""
+    return float(lead_in + (n - 1) * stagger + peel_duration)
+
+
+def phased_orbit_peeloff(t, index, n, radius, omega, *,
+                         peel_order=None, lead_in=0.5, stagger=3.0, peel_duration=4.0,
+                         spin=DEFAULT_PEEL_SPIN,
+                         spacing=3.0, downrange=4.6, base=(0.0, 0.0), altitude=0.0,
+                         phase_step=DEFAULT_PHASE_STEP, phase0=DEFAULT_PHASE0, phases=None,
+                         yaw_mode="inward", fixed_yaw=0.0):
+    """Staggered peel-off return for drone `index` at return-relative time `t>=0`.
+
+    Each drone keeps orbiting (CCW at the same `omega` as the orbit) until its
+    peel time ``t_peel = lead_in + rank*stagger``, where `rank` is its position
+    in `peel_order` (default ``n-1, ..., 0`` — highest index peels first). It
+    then curls smoothly into its own circle center over `peel_duration`: radius
+    `R -> 0` on a smoothstep while the angle advances a further `spin`.
+
+    Peeling one drone at a time keeps the overlapping circles from colliding
+    mid-collapse: only one drone crosses the centers-aligned zone at any instant,
+    so the return clears the reverse-retrace floor (see
+    test_peeloff_separation_beats_retrace). The motion never flips rotational
+    sense.
+
+    At `t=0` every drone is still on its orbit, so this joins
+    :func:`phased_orbit_setpoint` when the orbit ends on an integer revolution.
+    Returns ``(position, yaw)`` in the z-up world frame.
+    """
+    if not 0 <= index < n:
+        raise ValueError(f"index {index} out of range for n={n}")
+    order = list(range(n - 1, -1, -1)) if peel_order is None else list(peel_order)
+    if sorted(order) != list(range(n)):
+        raise ValueError(f"peel_order must be a permutation of 0..{n - 1}, got {order}")
+    rank = order.index(index)
+    t_peel = lead_in + rank * stagger
+    bx, by = base
+    cx = bx + spacing * index
+    cy = by + downrange
+    phi = phased_orbit_phases(n, phase_step=phase_step, phase0=phase0, phases=phases)[index]
+    if t < t_peel:
+        theta = phi + omega * t
+        r = radius
+    else:
+        u = float(np.clip((t - t_peel) / max(1e-6, peel_duration), 0.0, 1.0))
+        s = u * u * (3.0 - 2.0 * u)  # smoothstep: zero rate at both ends
+        theta = phi + omega * t_peel + spin * s
+        r = radius * (1.0 - s)
+    pos = np.array([cx + r * np.cos(theta), cy + r * np.sin(theta), altitude])
+    return pos, float(_yaw_for(theta, yaw_mode, fixed_yaw))
 
 
 def phased_orbit_positions(t, n, radius, omega, *,

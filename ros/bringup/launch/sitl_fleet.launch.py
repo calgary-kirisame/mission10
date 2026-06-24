@@ -71,7 +71,7 @@ def _setup(context, *args, **kwargs):
     if num > len(vehicles):
         raise RuntimeError(f"num_vehicles={num} exceeds {len(vehicles)} configured vehicles.")
 
-    world = fleet.get("world", "default")
+    world = LaunchConfiguration("world").perform(context).strip() or fleet.get("world", "default")
     actions = [_proc(f"exec MicroXRCEAgent udp4 -p {fleet.get('agent_port', 8888)}")]
 
     for i in range(num):
@@ -104,5 +104,7 @@ def generate_launch_description():
         DeclareLaunchArgument("num_vehicles", default_value="1"),
         DeclareLaunchArgument("px4_dir", default_value=os.environ.get("PX4_DIR", "")),
         DeclareLaunchArgument("fleet_config", default_value=""),
+        DeclareLaunchArgument("world", default_value="",
+                              description="gz world override (e.g. 'windy'); empty uses fleet.yaml."),
         OpaqueFunction(function=_setup),
     ])

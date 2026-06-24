@@ -58,6 +58,39 @@ def test_setpoint_matches_positions():
         assert pos[:2] == pytest.approx(grid[i, :2])
 
 
+def test_modulation_zero_at_t0_and_default_is_steady():
+    omega = 0.43
+    for i in range(N):
+        steady, _ = po.phased_orbit_setpoint(0.0, i, N, R, omega, **SCHEDULE)
+        modded, _ = po.phased_orbit_setpoint(
+            0.0, i, N, R, omega, mod_amp=0.4, mod_phase=1.1, **SCHEDULE)
+        assert modded[:2] == pytest.approx(steady[:2])  # zeroed at t=0 (joins insertion)
+        t = 0.7
+        a, _ = po.phased_orbit_setpoint(t, i, N, R, omega, mod_amp=0.0, **SCHEDULE)
+        b, _ = po.phased_orbit_setpoint(t, i, N, R, omega, **SCHEDULE)
+        assert a[:2] == pytest.approx(b[:2])  # mod_amp=0 is the steady orbit
+
+
+def test_modulation_lifts_min_separation():
+    omega = 2.0 / R
+    amp = [-0.50, 0.43, 0.42, -0.29]
+    phase = np.radians([358.0, 204.0, 72.0, 254.0])
+    ts = np.linspace(0.0, 2.0 * np.pi / omega, 3000)  # one orbit period covers all revs
+
+    def worst(use_mod):
+        return min(
+            po.min_pairwise_separation(np.array([
+                po.phased_orbit_setpoint(
+                    t, i, N, R, omega,
+                    mod_amp=amp[i] if use_mod else 0.0,
+                    mod_phase=phase[i] if use_mod else 0.0, **SCHEDULE)[0]
+                for i in range(N)]))
+            for t in ts)
+
+    assert worst(False) == pytest.approx(2.495, abs=1e-2)  # steady floor
+    assert worst(True) > 3.1  # non-steady lift, ~3.20 m, above the 3 m hover-row cap
+
+
 def test_orbit_velocity_matches_finite_difference():
     t, omega, dt = 1.3, 0.43, 1e-5
     for i in range(N):
@@ -88,6 +121,52 @@ def test_insertion_velocity_matches_finite_difference():
         analytic = po.phased_orbit_insertion_velocity(
             s, i, N, R, s_dot=s_dot, **SCHEDULE)
         assert analytic == pytest.approx(numeric, abs=1e-5)
+
+
+def test_peeloff_joins_orbit_at_t0():
+    omega = 0.43
+    for i in range(N):
+        orbit, _ = po.phased_orbit_setpoint(0.0, i, N, R, omega, **SCHEDULE)
+        peel, _ = po.phased_orbit_peeloff(0.0, i, N, R, omega, **SCHEDULE)
+        assert peel[:2] == pytest.approx(orbit[:2])
+
+
+def test_peeloff_continues_orbit_until_peel_then_centers():
+    omega = 0.43
+    centers = po.phased_orbit_centers(N, spacing=SPACING, downrange=DOWNRANGE)
+    total = po.peeloff_duration(N)
+    for i in range(N):
+        # still orbiting just before its peel time
+        rank = list(range(N - 1, -1, -1)).index(i)
+        t_peel = 0.5 + rank * 3.0
+        pre, _ = po.phased_orbit_peeloff(t_peel - 1e-6, i, N, R, omega, **SCHEDULE)
+        orbit, _ = po.phased_orbit_setpoint(t_peel, i, N, R, omega, **SCHEDULE)
+        assert pre[:2] == pytest.approx(orbit[:2], abs=1e-3)
+        # parked at its own center by the end
+        end, _ = po.phased_orbit_peeloff(total + 1.0, i, N, R, omega, **SCHEDULE)
+        assert end[:2] == pytest.approx(centers[i])
+
+
+def test_peeloff_default_order_is_highest_first():
+    omega = 0.43
+    centers = po.phased_orbit_centers(N, spacing=SPACING, downrange=DOWNRANGE)
+    # at drone N-1's peel completion, it is home while drone 0 is still orbiting
+    t = 0.5 + 4.0 + 1e-3
+    high, _ = po.phased_orbit_peeloff(t, N - 1, N, R, omega, **SCHEDULE)
+    low, _ = po.phased_orbit_peeloff(t, 0, N, R, omega, **SCHEDULE)
+    assert high[:2] == pytest.approx(centers[N - 1], abs=0.05)
+    assert np.linalg.norm(low[:2] - centers[0]) == pytest.approx(R, abs=0.05)
+
+
+def test_peeloff_separation_beats_retrace():
+    omega = 2.0 / R
+    total = po.peeloff_duration(N)
+    ts = np.linspace(0.0, total + 1.0, 2000)
+    worst = min(
+        po.min_pairwise_separation(
+            np.array([po.phased_orbit_peeloff(t, i, N, R, omega, **SCHEDULE)[0] for i in range(N)]))
+        for t in ts)
+    assert worst > 2.8  # ~3.0 m, vs 2.09 m for the reverse retrace
 
 
 def test_in_phase_lockstep_is_safe():

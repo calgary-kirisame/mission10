@@ -22,7 +22,15 @@ import os
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, OpaqueFunction, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    RegisterEventHandler,
+    Shutdown,
+)
+from launch.event_handlers import OnProcessExit
 from launch.launch_description_sources import PythonLaunchDescriptionSource
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
@@ -34,6 +42,38 @@ M_PER_DEG = 111320.0
 
 def _launch_file(package: str, *parts: str) -> str:
     return os.path.join(get_package_share_directory(package), "launch", *parts)
+
+
+def _topic_gate(name, *, ros_topics=(), gz_topics=(), timeout_s=120.0):
+    """ExecuteProcess that blocks until all listed topics exist, then exits 0
+    (exit 1 on timeout). Replaces a fixed startup sleep: it polls `ros2 topic
+    list` / `gz topic -l` once a second and releases the dependent nodes the
+    instant the world is ready, so a slow PX4 rebuild just waits longer instead
+    of racing a fixed timer. The poll runs in a launch subprocess, so its own
+    `sleep` is fine."""
+    tries = max(1, int(timeout_s))
+    blocks = []
+    if ros_topics:
+        greps = " && ".join(f"grep -qxF '{t}' <<<\"$R\"" for t in ros_topics)
+        blocks.append(f'R="$(ros2 topic list 2>/dev/null)" && {greps}')
+    if gz_topics:
+        greps = " && ".join(f"grep -qxF '{t}' <<<\"$G\"" for t in gz_topics)
+        blocks.append(f'G="$(gz topic -l 2>/dev/null)" && {greps}')
+    cond = " && ".join(f"{{ {b}; }}" for b in blocks)
+    script = (
+        f"for _ in $(seq 1 {tries}); do if {cond}; then exit 0; fi; sleep 1; done; "
+        f'echo "{name}: topics not ready after {timeout_s:g}s" >&2; exit 1'
+    )
+    return ExecuteProcess(cmd=["bash", "-lc", script], name=name, output="screen")
+
+
+def _on_ready(name, actions):
+    """Launch `actions` when the gate exits 0; fail-fast (shut down) on timeout."""
+    def _cb(event, _context):
+        if event.returncode == 0:
+            return actions
+        return [Shutdown(reason=f"{name} timed out waiting for topics")]
+    return _cb
 
 
 def _spawn_origin(home, pose):
@@ -55,8 +95,8 @@ def _setup(context, *args, **kwargs):
     publish_ev = LaunchConfiguration("publish_ev").perform(context)
     wait_for_start = LaunchConfiguration("wait_for_start").perform(context)
     mission_config = LaunchConfiguration("mission_config").perform(context)
-    ev_delay = float(LaunchConfiguration("ev_delay_s").perform(context))
-    mission_delay = float(LaunchConfiguration("mission_delay_s").perform(context))
+    world = LaunchConfiguration("world").perform(context)
+    boot_timeout = float(LaunchConfiguration("boot_timeout_s").perform(context))
 
     config_file = LaunchConfiguration("fleet_config").perform(context).strip()
     if not config_file:
@@ -77,12 +117,16 @@ def _setup(context, *args, **kwargs):
             "num_vehicles": str(num),
             "px4_dir": px4_dir,
             "fleet_config": config_file,
+            "world": world,
         }.items(),
     )
 
     ev_nodes, mission_nodes = [], []
+    namespaces = [vehicles[i].get("namespace", f"px4_{i}") for i in range(num)]
     for i in range(num):
-        namespace = vehicles[i].get("namespace", f"px4_{i}")
+        namespace = namespaces[i]
+        east, north = (float(v) for v in vehicles[i].get("pose", "0,0,0,0,0,0").split(",")[:2])
+        peers = [namespaces[j] for j in range(num) if j != i]
         ev_nodes.append(IncludeLaunchDescription(
             PythonLaunchDescriptionSource(_launch_file("sim_truth_ev", "ev_bridge.launch.py")),
             launch_arguments={
@@ -102,16 +146,36 @@ def _setup(context, *args, **kwargs):
                 "drone_index": i,
                 "drone_count": num,
                 "wait_for_start": wait_for_start.lower() in ("1", "true", "yes", "on"),
+                "spawn_e_m": east,
+                "spawn_n_m": north,
+                "peer_namespaces": peers if peers else [""],
                 **_spawn_origin(home_gps, vehicles[i].get("pose", "0,0,0,0,0,0")),
             }],
         ))
 
+    # Readiness gates instead of fixed sleeps. EV bridges wait on each model's gz
+    # odometry topic (model spawned); missions wait on every EV bridge's odom
+    # output (world up + EV flowing), then self-gate on PX4 telemetry in
+    # WAIT_LINK. mission_gate's topics only appear once the EV nodes run, so it
+    # naturally sequences after them.
+    ev_gate = _topic_gate(
+        "ev_gate",
+        gz_topics=[f"/model/{gz_model_name(fleet['model'], i)}/odometry_with_covariance"
+                   for i in range(num)],
+        timeout_s=boot_timeout)
+    mission_gate = _topic_gate(
+        "mission_gate",
+        ros_topics=[f"/{vehicles[i].get('namespace', f'px4_{i}')}/ground_truth/odometry"
+                    for i in range(num)],
+        timeout_s=boot_timeout)
+
     return [
         sitl,
-        # TODO(poc): replace startup sleeps with topic-readiness gates
-        # (gz odometry per model, then PX4 status + EV samples per drone).
-        TimerAction(period=ev_delay, actions=ev_nodes),
-        TimerAction(period=mission_delay, actions=mission_nodes),
+        ev_gate,
+        RegisterEventHandler(OnProcessExit(target_action=ev_gate, on_exit=_on_ready("ev_gate", ev_nodes))),
+        mission_gate,
+        RegisterEventHandler(OnProcessExit(
+            target_action=mission_gate, on_exit=_on_ready("mission_gate", mission_nodes))),
     ]
 
 
@@ -122,8 +186,9 @@ def generate_launch_description():
         DeclareLaunchArgument("fleet_config", default_value=""),
         DeclareLaunchArgument("mission_config", default_value=""),
         DeclareLaunchArgument("publish_ev", default_value="true"),
+        DeclareLaunchArgument("world", default_value="",
+                              description="gz world override (e.g. 'windy'); empty uses fleet.yaml."),
         DeclareLaunchArgument("wait_for_start", default_value="true"),
-        DeclareLaunchArgument("ev_delay_s", default_value="30.0"),
-        DeclareLaunchArgument("mission_delay_s", default_value="42.0"),
+        DeclareLaunchArgument("boot_timeout_s", default_value="180.0"),
         OpaqueFunction(function=_setup),
     ])
